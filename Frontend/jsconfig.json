@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "**/*.js",
+    "**/*.jsx",
+    "app/auth.js",
+    "app/_layout.js",
+    ".expo/types/router.d.js"
+  ]
+}
