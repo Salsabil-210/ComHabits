@@ -1,15 +1,69 @@
 const User = require('../models/UserModel');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
+const fsPromises = fs.promises;
 const path = require('path');
 const { validateEmail, validatePassword } = require('../util/validators');
 const uploadsConfig = require('../config/uploads');
 
+const ensureDirectoryExists = async (directoryPath) => {
+  await fsPromises.mkdir(directoryPath, { recursive: true });
+};
+
+const deleteFileIfExists = async (filePath) => {
+  if (!filePath) {
+    return;
+  }
+
+  try {
+    await fsPromises.unlink(filePath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error('Error deleting file:', error);
+    }
+  }
+};
+
+const buildProfilePictureInfo = (userId, originalName = '') => {
+  const extension = path.extname(originalName) || '';
+  const filename = `profile-${userId}${extension}`;
+  const directory = uploadsConfig.getProfilePicturePath();
+  const filePath = path.join(directory, filename);
+  const publicUrl = uploadsConfig.getProfilePictureUrl(filename);
+
+  return { directory, filename, filePath, publicUrl };
+};
+
+const removeExistingProfilePicture = async (profilePicturePath, newFilePath) => {
+  if (!profilePicturePath) {
+    return;
+  }
+
+  const filename = path.basename(profilePicturePath);
+  const candidatePaths = new Set([
+    path.join(uploadsConfig.getProfilePicturePath(), filename),
+    path.join(uploadsConfig.baseDir, filename),
+    path.resolve(__dirname, '../../public/uploads', filename)
+  ]);
+
+  for (const candidate of candidatePaths) {
+    if (candidate === newFilePath) {
+      continue;
+    }
+
+    await deleteFileIfExists(candidate);
+  }
+};
+
 // Update the uploadProfilePicture method
 exports.uploadProfilePicture = async (req, res) => {
+  const tempFilePath = req.file ? req.file.path : undefined;
+  let targetFilePath;
+
   try {
     // Check authentication
     if (!req.userId) {
+      await deleteFileIfExists(tempFilePath);
       return res.status(401).json({
         success: false,
         message: "Not authenticated"
@@ -27,40 +81,25 @@ exports.uploadProfilePicture = async (req, res) => {
     // Find user
     const user = await User.findById(req.userId);
     if (!user) {
+      await deleteFileIfExists(tempFilePath);
       return res.status(404).json({
         success: false,
         message: "User not found"
       });
     }
 
-    // Define paths
-    const uploadsDir = path.join(__dirname, '../../public/uploads');
-    const tempPath = req.file.path;
-    const newFilename = `profile-${req.userId}${path.extname(req.file.originalname)}`;
-    const targetPath = path.join(uploadsDir, newFilename);
+    const { directory, filePath, publicUrl } = buildProfilePictureInfo(
+      req.userId,
+      req.file.originalname
+    );
+    targetFilePath = filePath;
 
-    // Ensure uploads directory exists
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
+    await ensureDirectoryExists(directory);
+    await fsPromises.rename(tempFilePath, targetFilePath);
 
-    // Move file from temp to permanent location
-    fs.renameSync(tempPath, targetPath);
+    await removeExistingProfilePicture(user.profilePicture, targetFilePath);
 
-    // Delete old image if exists
-    if (user.profilePicture) {
-      try {
-        const oldPath = path.join(uploadsDir, path.basename(user.profilePicture));
-        if (fs.existsSync(oldPath)) {
-          fs.unlinkSync(oldPath);
-        }
-      } catch (err) {
-        console.error("Error deleting old profile picture:", err);
-      }
-    }
-
-    // Update user with new profile picture URL
-    user.profilePicture = `/uploads/${newFilename}`;
+    user.profilePicture = publicUrl;
     await user.save();
 
     return res.status(200).json({
@@ -70,6 +109,10 @@ exports.uploadProfilePicture = async (req, res) => {
     });
   } catch (error) {
     console.error("Upload error:", error);
+
+    await deleteFileIfExists(tempFilePath);
+    await deleteFileIfExists(targetFilePath);
+
     return res.status(500).json({
       success: false,
       message: "Failed to upload profile picture",
@@ -80,21 +123,20 @@ exports.uploadProfilePicture = async (req, res) => {
 
 exports.deleteProfilePicture = async (req, res) => {
   try {
-    if (!req.userId) return res.status(401).send("Not authenticated");
+    if (!req.userId) {
+      return res.status(401).send("Not authenticated");
+    }
 
     const user = await User.findById(req.userId);
-    if (!user) return res.status(404).send("User not found");    if (!user.profilePicture) return res.status(400).send("No profile picture to delete");    const profilePicsDir = uploadsConfig.getProfilePicturePath();
-    const filename = user.profilePicture.split('/').pop();
-    const imagePath = path.join(profilePicsDir, filename);
-    
-    try {
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
-    } catch (error) {
-      console.error('Error deleting file:', error);
-      // Continue even if file delete fails - we still want to remove the reference from the user
+    if (!user) {
+      return res.status(404).send("User not found");
     }
+
+    if (!user.profilePicture) {
+      return res.status(400).send("No profile picture to delete");
+    }
+
+    await removeExistingProfilePicture(user.profilePicture);
 
     user.profilePicture = null;
     await user.save();

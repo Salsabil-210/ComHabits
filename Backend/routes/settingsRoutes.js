@@ -12,7 +12,7 @@ const uploadsConfig = require('../config/uploads');
 // Initialize directory structure
 const baseDir = uploadsConfig.baseDir;
 const profilePicsDir = uploadsConfig.getProfilePicturePath();
-const tempUploadDir = path.join(baseDir, 'temp');
+const tempUploadDir = uploadsConfig.getTempPath();
 
 // Create all required directories
 [baseDir, profilePicsDir, tempUploadDir].forEach(dir => {
