@@ -1,417 +1,13 @@
 const Habit = require("../models/HabitModel");
 const User = require("../models/UserModel");
-const { zonedTimeToUtc } = require('date-fns-tz');
-const { format,isBefore, parseISO, isValid, isToday, isAfter, isSameDay } = require("date-fns");
+const { format, isBefore, isToday, isSameDay } = require("date-fns");
 const { createHabitValidation, updateHabitValidation } = require("../util/habitValidators");
 const mongoose = require('mongoose');
-
-
-// --- Date Validation ---
-// Updated validateDates function with consistent date parsing
-const validateDates = (startDate, endDate, reminders, repeat, repeatDays, selectedMonthlyDates) => {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0); // Normalize to start of day
-
-  // Helper function for safe date parsing
-  const safeParseDatee = (dateInput) => {
-    if (!dateInput) return null;
-    
-    if (dateInput instanceof Date) {
-      const date = new Date(dateInput);
-      date.setHours(0, 0, 0, 0);
-      return date;
-    }
-    
-    if (typeof dateInput === 'string') {
-      // Handle ISO string format
-      if (dateInput.includes('T')) {
-        const date = new Date(dateInput);
-        if (isNaN(date.getTime())) throw new Error(`Invalid date format: ${dateInput}`);
-        date.setHours(0, 0, 0, 0);
-        return date;
-      }
-      
-      // Handle YYYY-MM-DD format
-      const [year, month, day] = dateInput.split('-').map(Number);
-      if (year && month && day) {
-        return new Date(year, month - 1, day);
-      }
-    }
-    
-    throw new Error(`Invalid date format: ${dateInput}`);
-  };
-
-  if (startDate) {
-    const parsedStartDate = safeParseDatee(startDate);
-    if (isBefore(parsedStartDate, now) && !isToday(parsedStartDate)) {
-      throw new Error("Start date cannot be in the past (except today)");
-    }
-  }
-
-  if (endDate) {
-    const parsedEndDate = safeParseDatee(endDate);
-    const parsedStartDate = startDate ? safeParseDatee(startDate) : null;
-    if (parsedStartDate && isBefore(parsedEndDate, parsedStartDate)) {
-      throw new Error("End date must be after the start date");
-    }
-  }
-
-  // Rest of validation logic...
-  if (reminders && reminders.length > 0) {
-    const uniqueReminders = new Set(reminders);
-    if (uniqueReminders.size !== reminders.length) {
-      throw new Error("Reminders must be unique");
-    }
-    
-    for (const reminder of reminders) {
-      const parsedReminder = safeParseDatee(reminder);
-      if (isBefore(parsedReminder, now) && !isToday(parsedReminder)) {
-        throw new Error("Reminders cannot be in the past (except today)");
-      }
-      
-      if (startDate) {
-        const parsedStartDate = safeParseDatee(startDate);
-        if (isBefore(parsedReminder, parsedStartDate)) {
-          throw new Error("Reminders must be after the start date");
-        }
-      }
-      
-      if (endDate) {
-        const parsedEndDate = safeParseDatee(endDate);
-        if (isBefore(parsedEndDate, parsedReminder)) {
-          throw new Error("Reminders cannot be after the end date");
-        }
-      }
-    }
-  }
-
-  // Weekly validation
-  if (repeat === "weekly") {
-    if (!repeatDays || repeatDays.length === 0) {
-      throw new Error("Repeat days are required for weekly habits");
-    }
-    const validDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-    for (const day of repeatDays) {
-      if (!validDays.includes(day)) {
-        throw new Error(`Invalid repeat day: ${day}`);
-      }
-    }
-  }
-
-  // Monthly validation
-  if (repeat === "monthly" && selectedMonthlyDates) {
-    if (!Array.isArray(selectedMonthlyDates)) {
-      throw new Error("Selected monthly dates must be an array");
-    }
-    if (selectedMonthlyDates.length === 0) {
-      throw new Error("At least one date must be selected for monthly repetition");
-    }
-    
-    for (const dateStr of selectedMonthlyDates) {
-      const date = safeParseDatee(dateStr);
-      if (isBefore(date, now) && !isSameDay(date, now)) {
-        throw new Error("Cannot select past dates for monthly repetition (except today)");
-      }
-      
-      if (startDate) {
-        const parsedStartDate = safeParseDatee(startDate);
-        if (isBefore(date, parsedStartDate)) {
-          throw new Error("Monthly dates cannot be before the habit start date");
-        }
-      }
-      
-      if (endDate) {
-        const parsedEndDate = safeParseDatee(endDate);
-        if (isAfter(date, parsedEndDate)) {
-          throw new Error("Monthly dates cannot be after the habit end date");
-        }
-      }
-    }
-    
-    const uniqueDates = new Set(selectedMonthlyDates.map(d => safeParseDatee(d).toISOString().split('T')[0]));
-    if (uniqueDates.size !== selectedMonthlyDates.length) {
-      throw new Error("Monthly dates must be unique");
-    }
-  }
-};
-
-// --- Helper to safely parse YYYY-MM-DD into a local date ---
-const parseLocalDate = (dateInput) => {
-  if (!dateInput) return null;
-  
-  // If already a Date object, create a new one to avoid mutation
-  if (dateInput instanceof Date) {
-    return new Date(dateInput);
-  }
-  
-  // If it's a string, parse it properly
-  if (typeof dateInput === 'string') {
-    // Handle ISO string format
-    if (dateInput.includes('T')) {
-      return new Date(dateInput);
-    }
-    // Handle YYYY-MM-DD format
-    const [year, month, day] = dateInput.split('-').map(Number);
-    if (year && month && day) {
-      return new Date(year, month - 1, day); // month is 0-based
-    }
-  }
-  
-  // Fallback - try direct Date construction
-  const date = new Date(dateInput);
-  if (isNaN(date.getTime())) {
-    throw new Error(`Invalid date format: ${dateInput}`);
-  }
-  return date;
-};
-
-function hasScheduleChanged(oldHabit, newData) {
-  const scheduleFields = [
-    'startDate',
-    'endDate',
-    'repeat',
-    'repeatDays',
-    'frequency',
-    'repeatCount',
-    'selectedMonthlyDates',
-    'reminderOffsets'
-  ];
-
-  return scheduleFields.some(field => {
-    if (newData[field] === undefined) return false;
-    
-    const oldValue = oldHabit[field];
-    const newValue = newData[field];
-    
-    // مقارنة القيم مع مراعاة التواريخ
-    if (oldValue instanceof Date || newValue instanceof Date) {
-      return oldValue?.getTime() !== newValue?.getTime();
-    }
-    
-    // مقارنة المصفوفات
-    if (Array.isArray(oldValue) && Array.isArray(newValue)) {
-      return JSON.stringify(oldValue) !== JSON.stringify(newValue);
-    }
-    
-    // المقارنة العادية
-    return oldValue !== newValue;
-  });
-}
-// --- Final Fix: Repeat Dates as plain strings (no timezone bugs) ---
-const calculateRepeatDates = (
-  startDate,
-  repeat,
-  repeatDays,
-  frequency,
-  repeatCount,
-  endDate,
-  selectedMonthlyDates,
-  reminderOffsets = []
-) => {
-  const repeatDates = [];
-  const reminders = [];
-
-  // Helper to parse date strings as local dates
-  const parseLocalDate = (dateStr) => {
-    if (dateStr instanceof Date) return new Date(dateStr);
-    const [year, month, day] = dateStr.split('-').map(Number);
-    return new Date(year, month - 1, day);
-  };
-
-  // Parse dates as local dates (no timezone conversion)
-  const parsedStartDate = parseLocalDate(startDate);
-  parsedStartDate.setHours(0, 0, 0, 0);
-
-  const parsedEndDate = endDate ? parseLocalDate(endDate) : null;
-  if (parsedEndDate) parsedEndDate.setHours(23, 59, 59, 999);
-
-  const addDateWithReminders = (date) => {
-    const normalizedDate = new Date(date);
-    normalizedDate.setHours(0, 0, 0, 0);
-
-    // Skip if before start date or after end date
-    if (isBefore(normalizedDate, parsedStartDate)) return false;
-    if (parsedEndDate && isAfter(normalizedDate, parsedEndDate)) return false;
-
-    const dateStr = format(normalizedDate, 'yyyy-MM-dd');
-    repeatDates.push(dateStr);
-
-    // Calculate reminders
-    reminderOffsets.forEach(offset => {
-      const reminderDate = new Date(normalizedDate);
-      reminderDate.setDate(reminderDate.getDate() - offset);
-      if (
-        !isBefore(reminderDate, parsedStartDate) && 
-        (!parsedEndDate || !isAfter(reminderDate, parsedEndDate))
-      ) {
-        reminders.push(format(reminderDate, 'yyyy-MM-dd'));
-      }
-    });
-
-    return true;
-  };
-
-  // Always add the start date first
-  addDateWithReminders(parsedStartDate);
-
-  if (repeat === "daily") {
-    const actualRepeatCount = repeatCount && repeatCount > 0 ? repeatCount : Infinity;
-    let addedCount = 0;
-    
-    for (let i = 1; addedCount < actualRepeatCount; i++) {
-      const currentDate = new Date(parsedStartDate);
-      currentDate.setDate(currentDate.getDate() + i);
-      if (!addDateWithReminders(currentDate)) break;
-      addedCount++;
-    }
-  } 
-  else if (repeat === "weekly") {
-    const weeksToAdd = parseInt(frequency?.match(/\d+/)?.[0] || "1");
-    const dayMap = {
-      Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
-      Thursday: 4, Friday: 5, Saturday: 6,
-    };
-
-    // Calculate first occurrences of each selected day
-    const firstOccurrences = repeatDays.map(day => {
-      const dayIndex = dayMap[day];
-      const firstDate = new Date(parsedStartDate);
-      
-      // Find days until next occurrence of this day
-      let daysToAdd = (dayIndex + 7 - firstDate.getDay()) % 7;
-      // If same day, use next week (unless it's the start date)
-      if (daysToAdd === 0 && firstDate > parsedStartDate) {
-        daysToAdd = 7;
-      }
-      firstDate.setDate(firstDate.getDate() + daysToAdd);
-      return firstDate;
-    });
-
-    // For weekly, repeatCount means number of weeks to repeat
-    const weeksToRepeat = repeatCount && repeatCount > 0 ? repeatCount : Infinity;
-    let weeksAdded = 0;
-
-    while (weeksAdded < weeksToRepeat) {
-      let addedInThisWeek = false;
-
-      // Add all selected days for this week
-      for (const firstDate of firstOccurrences) {
-        const currentDate = new Date(firstDate);
-        currentDate.setDate(currentDate.getDate() + (weeksAdded * weeksToAdd * 7));
-        
-        if (addDateWithReminders(currentDate)) {
-          addedInThisWeek = true;
-        }
-      }
-
-      if (addedInThisWeek) {
-        weeksAdded++;
-      } else {
-        break; // No dates were added this week
-      }
-    }
-  } 
- else if (repeat === "monthly") {
-  const monthsToAdd = parseInt(frequency?.match(/\d+/)?.[0] || "1");
-  
-  // Validate selected dates
-  if (!selectedMonthlyDates || !Array.isArray(selectedMonthlyDates) || selectedMonthlyDates.length === 0) {
-    throw new Error("At least one date must be selected for monthly repetition");
-  }
-
-  // Convert and validate days (1-31)
-  const daysOfMonth = selectedMonthlyDates.map(d => {
-    let day;
-    if (typeof d === 'string') {
-      if (d.includes('-')) { // Date format (2025-05-30)
-        const date = parseLocalDate(d);
-        if (isNaN(date.getTime())) throw new Error(`Invalid date format: ${d}`);
-        day = date.getDate();
-      } else { // Day number ("30")
-        day = parseInt(d);
-        if (isNaN(day)) throw new Error(`Invalid day: ${d}`);
-      }
-    } else if (typeof d === 'number') {
-      day = d;
-    } else {
-      throw new Error(`Invalid date value: ${d}`);
-    }
-    
-    if (day < 1 || day > 31) throw new Error(`Day must be between 1-31: ${day}`);
-    return day;
-  });
-
-  const occurrencesPerDate = repeatCount && repeatCount > 0 ? repeatCount : 5;
-  const processedDates = new Set();
-
-  // Process each selected day
-  for (const day of daysOfMonth) {
-    let occurrences = 0;
-    let monthsAdded = 0;
-
-    while (occurrences < occurrencesPerDate && monthsAdded < 1000) { // 1000 month safety limit
-      const currentDate = new Date(parsedStartDate);
-      currentDate.setMonth(currentDate.getMonth() + monthsAdded * monthsToAdd);
-      
-      const month = currentDate.getMonth();
-      const year = currentDate.getFullYear();
-
-      // LEAP YEAR HANDLING (February)
-      if (month === 1) { // February
-        const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-        const febLastDay = isLeapYear ? 29 : 28;
-        
-        if (day > febLastDay) {
-          // Carry over to March
-          const nextMonthDate = new Date(year, 2, day - febLastDay); // March = month 2
-          const dateKey = nextMonthDate.toISOString().split('T')[0];
-          
-          if (!processedDates.has(dateKey) && addDateWithReminders(nextMonthDate)) {
-            processedDates.add(dateKey);
-            occurrences++;
-          }
-          monthsAdded++;
-          continue;
-        }
-      }
-
-      // REGULAR MONTHS
-      currentDate.setDate(1);
-      const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
-      
-      if (day <= lastDayOfMonth) {
-        currentDate.setDate(day);
-        const dateKey = currentDate.toISOString().split('T')[0];
-        
-        if (!processedDates.has(dateKey) && addDateWithReminders(currentDate)) {
-          processedDates.add(dateKey);
-          occurrences++;
-        }
-      } else {
-        // Carry over to next month
-        const nextMonthDate = new Date(year, month + 1, day - lastDayOfMonth);
-        const dateKey = nextMonthDate.toISOString().split('T')[0];
-        
-        if (!processedDates.has(dateKey) && addDateWithReminders(nextMonthDate)) {
-          processedDates.add(dateKey);
-          occurrences++;
-        }
-      }
-      
-      monthsAdded++;
-    }
-  }
-}
-
-  // Sort dates chronologically and remove duplicates
-  const uniqueDates = [...new Set(repeatDates)].sort((a, b) => new Date(a) - new Date(b));
-
-  return {
-    repeatDates: uniqueDates,
-    reminders: [...new Set(reminders)].sort((a, b) => new Date(a) - new Date(b))
-  };
-};
-
+const {
+  calculateRepeatDates,
+  parseDateInput,
+  validateDates,
+} = require('../services/habitScheduleService');
 // --- Create Habit ---
 exports.createHabit = async (req, res) => {
   try {
@@ -446,17 +42,34 @@ exports.createHabit = async (req, res) => {
       return res.status(400).json({ message: "selectedMonthlyDates are required for monthly repeat" });
     }
 
+    try {
+      validateDates({
+        startDate,
+        endDate,
+        reminders: [],
+        repeat,
+        repeatDays,
+        selectedMonthlyDates,
+      });
+    } catch (validationError) {
+      return res.status(400).json({ message: validationError.message });
+    }
+
+    // Normalize core dates for storage and scheduling
+    const parsedStartDate = parseDateInput(startDate);
+    const parsedEndDate = endDate ? parseDateInput(endDate) : null;
+
     // ✅ حساب التكرار والتذكير
-    const { repeatDates, reminders } = calculateRepeatDates(
-      startDate,
+    const { repeatDates, reminders } = calculateRepeatDates({
+      startDate: parsedStartDate,
       repeat,
       repeatDays,
       frequency,
       repeatCount,
-      endDate,
+      endDate: parsedEndDate,
       selectedMonthlyDates,
-      reminderOffsets
-    );
+      reminderOffsets,
+    });
 
     // ✅ إنشاء العادة
     const newHabit = new Habit({
@@ -464,8 +77,8 @@ exports.createHabit = async (req, res) => {
       name,
       description,
       type,
-      startDate: new Date(startDate),
-      endDate: endDate ? new Date(endDate) : null,
+      startDate: parsedStartDate,
+      endDate: parsedEndDate,
       repeat,
       repeatDays,
       frequency,
@@ -514,22 +127,11 @@ exports.updateHabit = async (req, res) => {
 
     // Convert date strings to Date objects for database storage
     const convertDateFields = (data) => {
-      const dateFields = ['startDate', 'endDate'];
       const converted = { ...data };
-      dateFields.forEach(field => {
+      ['startDate', 'endDate'].forEach((field) => {
         if (converted[field]) {
           try {
-            if (typeof converted[field] === 'string') {
-              if (converted[field].includes('T')) {
-                converted[field] = new Date(converted[field]);
-              } else {
-                const [year, month, day] = converted[field].split('-').map(Number);
-                converted[field] = new Date(year, month - 1, day);
-              }
-            }
-            if (isNaN(converted[field].getTime())) {
-              throw new Error(`Invalid ${field} format`);
-            }
+            converted[field] = parseDateInput(converted[field]);
           } catch (error) {
             throw new Error(`Invalid ${field}: ${error.message}`);
           }
@@ -543,14 +145,14 @@ exports.updateHabit = async (req, res) => {
 
     // Validate update data
     try {
-      validateDates(
-        processedUpdateData.startDate || habit.startDate,
-        processedUpdateData.endDate || habit.endDate,
-        [], // Skip reminder validation here
-        processedUpdateData.repeat !== undefined ? processedUpdateData.repeat : habit.repeat,
-        processedUpdateData.repeatDays || habit.repeatDays,
-        processedUpdateData.selectedMonthlyDates || habit.selectedMonthlyDates
-      );
+      validateDates({
+        startDate: processedUpdateData.startDate || habit.startDate,
+        endDate: processedUpdateData.endDate || habit.endDate,
+        reminders: [],
+        repeat: processedUpdateData.repeat !== undefined ? processedUpdateData.repeat : habit.repeat,
+        repeatDays: processedUpdateData.repeatDays || habit.repeatDays,
+        selectedMonthlyDates: processedUpdateData.selectedMonthlyDates || habit.selectedMonthlyDates,
+      });
     } catch (validationError) {
       return res.status(400).json({ message: validationError.message });
     }
@@ -606,16 +208,18 @@ exports.updateHabit = async (req, res) => {
     // Recalculate repeatDates/reminders if needed
     if (shouldRecalculate) {
       try {
-        const calculatedDates = calculateRepeatDates(
-          processedUpdateData.startDate || habit.startDate,
-          processedUpdateData.repeat !== undefined ? processedUpdateData.repeat : habit.repeat,
-          processedUpdateData.repeat === 'monthly' ? [] : (processedUpdateData.repeatDays || habit.repeatDays), // Force empty array for monthly
-          processedUpdateData.frequency || habit.frequency,
-          processedUpdateData.repeatCount || habit.repeatCount,
-          processedUpdateData.endDate || habit.endDate,
-          processedUpdateData.selectedMonthlyDates || habit.selectedMonthlyDates,
-          processedUpdateData.reminderOffsets || habit.reminderOffsets || []
-        );
+        const calculatedDates = calculateRepeatDates({
+          startDate: processedUpdateData.startDate || habit.startDate,
+          repeat: processedUpdateData.repeat !== undefined ? processedUpdateData.repeat : habit.repeat,
+          repeatDays: processedUpdateData.repeat === 'monthly'
+            ? []
+            : (processedUpdateData.repeatDays || habit.repeatDays),
+          frequency: processedUpdateData.frequency || habit.frequency,
+          repeatCount: processedUpdateData.repeatCount || habit.repeatCount,
+          endDate: processedUpdateData.endDate || habit.endDate,
+          selectedMonthlyDates: processedUpdateData.selectedMonthlyDates || habit.selectedMonthlyDates,
+          reminderOffsets: processedUpdateData.reminderOffsets || habit.reminderOffsets || [],
+        });
 
         // Always REPLACE, not merge, and deduplicate
         processedUpdateData.repeatDates = [...new Set(calculatedDates.repeatDates)];
