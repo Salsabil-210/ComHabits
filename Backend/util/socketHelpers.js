@@ -1,10 +1,31 @@
 const Notification = require('../models/NotificationModel');
 
+const isSocketServerReady = () => typeof global.io?.to === 'function';
+
+const getConnectedUsersMap = () => {
+  const { connectedUsers } = global;
+  return connectedUsers instanceof Map ? connectedUsers : null;
+};
+
+const emitNotificationToUser = (userId, notification) => {
+  if (!isSocketServerReady()) {
+    return false;
+  }
+
+  const connectedUsers = getConnectedUsersMap();
+  if (!connectedUsers || !connectedUsers.has(userId)) {
+    return false;
+  }
+
+  global.io.to(`user_${userId}`).emit('new_notification', notification);
+  return true;
+};
+
 const deliverNotification = async (recipientId, notificationData) => {
   try {
     console.log(`Attempting to deliver notification to ${recipientId}`);
-    console.log(`Connected users:`, global.connectedUsers);
-    
+    console.log('Connected users:', getConnectedUsersMap());
+
     // Save notification to database
     const notification = await Notification.create(notificationData);
     const populated = await Notification.findById(notification._id)
@@ -12,10 +33,8 @@ const deliverNotification = async (recipientId, notificationData) => {
       .populate('relatedHabitId', 'name')
       .populate('relatedUserId', 'name profilePicture');
 
-    // Try real-time delivery if user is online
-    if (global.connectedUsers?.[recipientId]) {
+    if (emitNotificationToUser(recipientId, populated)) {
       console.log(`User ${recipientId} is online, sending real-time notification`);
-      global.io.to(`user_${recipientId}`).emit('new_notification', populated);
       return { status: 'delivered', notification: populated };
     }
 
@@ -34,24 +53,27 @@ const deliverPendingNotifications = async (userId) => {
       recipientId: userId,
       status: 'unread'
     })
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .populate('senderId', 'name profilePicture')
-    .populate('relatedHabitId', 'name')
-    .populate('relatedUserId', 'name profilePicture');
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .populate('senderId', 'name profilePicture')
+      .populate('relatedHabitId', 'name')
+      .populate('relatedUserId', 'name profilePicture');
 
-    if (pendingNotifications.length === 0) return 0;
-
-    let deliveredCount = 0;
-    for (const notification of pendingNotifications) {
-      if (global.connectedUsers?.[userId]) {
-        global.io.to(`user_${userId}`).emit('new_notification', notification);
-        deliveredCount++;
-      }
+    if (pendingNotifications.length === 0) {
+      return 0;
     }
 
-    console.log(`Delivered ${deliveredCount} pending notifications to user ${userId}`);
-    return deliveredCount;
+    const connectedUsers = getConnectedUsersMap();
+    if (!isSocketServerReady() || !connectedUsers || !connectedUsers.has(userId)) {
+      return 0;
+    }
+
+    pendingNotifications.forEach((notification) => {
+      emitNotificationToUser(userId, notification);
+    });
+
+    console.log(`Delivered ${pendingNotifications.length} pending notifications to user ${userId}`);
+    return pendingNotifications.length;
 
   } catch (error) {
     console.error('Pending notifications delivery error:', error);
