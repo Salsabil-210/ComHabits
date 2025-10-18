@@ -69,7 +69,7 @@ const deliverPendingNotifications = async (userId) => {
     }
 
     pendingNotifications.forEach((notification) => {
-      global.io.to(`user_${userId}`).emit('new_notification', notification);
+      emitNotificationToUser(userId, notification);
     });
 
     console.log(`Delivered ${pendingNotifications.length} pending notifications to user ${userId}`);
