@@ -64,7 +64,7 @@ const deliverPendingNotifications = async (userId) => {
     }
 
     const connectedUsers = getConnectedUsersMap();
-    if (!connectedUsers || !connectedUsers.has(userId) || !isSocketServerReady()) {
+    if (!isSocketServerReady() || !connectedUsers || !connectedUsers.has(userId)) {
       return 0;
     }
 
