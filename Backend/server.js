@@ -9,42 +9,41 @@ const connectDB = require("./config/db");
 const path = require("path");
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
-const { deliverPendingNotifications } = require('./util/socketHelpers');
 const compression = require('compression');
 const mongoSanitize = require('express-mongo-sanitize');
 const hpp = require('hpp');
+const { deliverPendingNotifications } = require('./util/socketHelpers');
 
 dotenv.config();
 
-// Initialize Express app
 const app = express();
 const server = http.createServer(app);
 
-// Enhanced Security Middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "blob:"]
-    }
-  },
-  crossOriginResourcePolicy: { policy: "same-site" }
-}));
+const ensureUploadsDirectory = (directoryPath) => {
+  if (!fs.existsSync(directoryPath)) {
+    fs.mkdirSync(directoryPath, { recursive: true });
+  }
+};
 
-app.use(compression());
-app.use(mongoSanitize());
-app.use(hpp());
+const configureSecurity = (expressApp) => {
+  expressApp.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "blob:"]
+      }
+    },
+    crossOriginResourcePolicy: { policy: "same-site" }
+  }));
 
-// Ensure uploads directory exists
-const uploadsPath = path.join(__dirname, 'public/uploads');
-if (!fs.existsSync(uploadsPath)) {
-  fs.mkdirSync(uploadsPath, { recursive: true });
-}
+  expressApp.use(compression());
+  expressApp.use(mongoSanitize());
+  expressApp.use(hpp());
+};
 
-// Enhanced CORS configuration
-const corsOptions = {
+const createCorsOptions = () => ({
   origin: [
     "http://10.0.2.2:8081",       // Android emulator
     "http://localhost:8081",       // iOS simulator
@@ -54,23 +53,97 @@ const corsOptions = {
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   credentials: true,
   optionsSuccessStatus: 200
-};
-
-app.use(cors(corsOptions));
-
-// Socket.IO Configuration
-const io = new Server(server, {
-  cors: corsOptions,
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
-    skipMiddlewares: true
-  },
-  pingTimeout: 60000,
-  pingInterval: 25000
 });
 
-// Rate Limiting
-const apiLimiter = rateLimit({
+const configureParsers = (expressApp) => {
+  expressApp.use(express.json({ limit: '10kb' }));
+  expressApp.use(express.urlencoded({ extended: true, limit: '10kb' }));
+};
+
+const applyRateLimiting = (expressApp, options) => {
+  expressApp.use(rateLimit(options));
+};
+
+const registerApiRoutes = (expressApp, routes) => {
+  routes.forEach(({ path, route }) => {
+    expressApp.use(path, route);
+  });
+};
+
+const removeDisconnectedUser = (socketId, connectedUsers) => {
+  for (const [userId, registeredSocketId] of connectedUsers.entries()) {
+    if (registeredSocketId === socketId) {
+      connectedUsers.delete(userId);
+      console.log(`❌ User ${userId} disconnected`);
+      break;
+    }
+  }
+};
+
+const handleSocketAuthentication = async (socket, token, callback, connectedUsers) => {
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.userId;
+
+    connectedUsers.set(userId, socket.id);
+    socket.join(`user_${userId}`);
+
+    console.log(`🟢 Authenticated user ${userId}`);
+
+    await deliverPendingNotifications(userId);
+
+    callback({ success: true });
+  } catch (error) {
+    console.error('Socket auth error:', error);
+    callback({ success: false, message: 'Authentication failed' });
+  }
+};
+
+const registerSocketEvents = (io, connectedUsers) => {
+  io.on('connection', (socket) => {
+    console.log('🔌 New client connected:', socket.id);
+
+    socket.on('authenticate', (token, callback) =>
+      handleSocketAuthentication(socket, token, callback, connectedUsers)
+    );
+
+    socket.on('disconnect', () => {
+      console.log(`⚪ Client disconnected: ${socket.id}`);
+      removeDisconnectedUser(socket.id, connectedUsers);
+    });
+
+    socket.on('error', (error) => {
+      console.error('Socket error:', error);
+    });
+  });
+};
+
+const initializeSocketServer = (httpServer, corsOptions) => {
+  const io = new Server(httpServer, {
+    cors: corsOptions,
+    connectionStateRecovery: {
+      maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+      skipMiddlewares: true
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000
+  });
+
+  const connectedUsers = new Map();
+  registerSocketEvents(io, connectedUsers);
+
+  return { io, connectedUsers };
+};
+
+const uploadsPath = path.join(__dirname, 'public/uploads');
+ensureUploadsDirectory(uploadsPath);
+
+configureSecurity(app);
+
+const corsOptions = createCorsOptions();
+app.use(cors(corsOptions));
+
+applyRateLimiting(app, {
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 300, // Limit each IP to 300 requests per windowMs
   standardHeaders: true,
@@ -78,61 +151,10 @@ const apiLimiter = rateLimit({
   message: "Too many requests from this IP, please try again later."
 });
 
-app.use(apiLimiter);
+configureParsers(app);
 
-// Body Parsing
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+const { io, connectedUsers } = initializeSocketServer(server, corsOptions);
 
-// Socket.IO Connection Handling
-const connectedUsers = new Map(); // Using Map for better performance
-
-io.on('connection', (socket) => {
-  console.log('🔌 New client connected:', socket.id);
-  console.log('🔵 New connection:', socket.id);
-
-  socket.on('authenticate', async (token, callback) => {
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const userId = decoded.userId;
-      
-      // Store the socket ID for this user
-      connectedUsers.set(userId, socket.id);
-      socket.join(`user_${userId}`);
-      
-      console.log(`🟢 Authenticated user ${decoded.userId}`);
-      console.log(`✅ User ${userId} authenticated`);
-      
-      // Deliver any pending notifications
-      await deliverPendingNotifications(userId);
-      
-      callback({ success: true });
-    } catch (error) {
-      console.error('Socket auth error:', error);
-      callback({ success: false, message: 'Authentication failed' });
-    }
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
-    console.log('⚪ Disconnected:', socket.id);
-
-    // Clean up disconnected users
-    for (const [userId, socketId] of connectedUsers.entries()) {
-      if (socketId === socket.id) {
-        connectedUsers.delete(userId);
-        console.log(`❌ User ${userId} disconnected`);
-        break;
-      }
-    }
-  });
-
-  socket.on('error', (error) => {
-    console.error('Socket error:', error);
-  });
-});
-
-// Make io and connectedUsers available globally
 global.io = io;
 global.connectedUsers = connectedUsers;
 
@@ -156,9 +178,7 @@ const apiRoutes = [
 ];
 
 // Register routes
-apiRoutes.forEach(({ path, route }) => {
-  app.use(path, route);
-});
+registerApiRoutes(app, apiRoutes);
 
 // Static files
 app.use('/uploads', express.static(uploadsPath, {
