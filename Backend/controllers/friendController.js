@@ -387,8 +387,7 @@ exports.acceptFriendRequest = async (req, res) => {
 };
 
 exports.rejectFriendRequest = async (req, res) => {
-    console.log("Reject request body:", req.body);
-    console.log("User ID from auth:", req.userId);
+
     const session = await mongoose.startSession();
     try {
         const { requestId } = req.body;
@@ -427,11 +426,15 @@ exports.rejectFriendRequest = async (req, res) => {
             type: 'friend_request'
         }).session(session);
 
+        const rejectingUser = await User.findById(userId)
+            .select('name')
+            .session(session);
+
         await Notification.create([{
             recipientId: friendRequest.requester._id,
             senderId: userId,
             type: 'friend_request_rejected',
-            message: `${req.user.name} declined your friend request`,
+            message: `${rejectingUser.name} declined your friend request`,
             relatedFriendRequestId: requestId
         }], { session });
 

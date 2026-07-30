@@ -12,7 +12,7 @@ const sendRealTimeNotification = async (notification) => {
       .populate('relatedUserId', 'name profilePicture')
       .populate('relatedHabitId', 'name');
 
-    if (global.connectedUsers[notification.recipientId.toString()]) {
+    if (global.connectedUsers.get(notification.recipientId.toString())) {
       global.io.to(`user_${notification.recipientId}`).emit('new_notification', populated);
     }
   } catch (error) {

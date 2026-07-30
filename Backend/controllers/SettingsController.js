@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { validateEmail, validatePassword } = require('../util/validators');
 const uploadsConfig = require('../config/uploads');
+const BadHabit = require('../models/BadHabitModel');
+const Habit = require('../models/HabitModel');
+const Distraction = require('../models/distractionModel');
+const Friend = require('../models/FriendModel');
+const Notification = require('../models/NotificationModel');
 
 // Update the uploadProfilePicture method
 exports.uploadProfilePicture = async (req, res) => {
@@ -80,10 +85,13 @@ exports.uploadProfilePicture = async (req, res) => {
 
 exports.deleteProfilePicture = async (req, res) => {
   try {
-    if (!req.userId) return res.status(401).send("Not authenticated");
+    if (!req.userId) return res.status(401).json({ success: false, message: "Not authenticated" });
 
     const user = await User.findById(req.userId);
-    if (!user) return res.status(404).send("User not found");    if (!user.profilePicture) return res.status(400).send("No profile picture to delete");    const profilePicsDir = uploadsConfig.getProfilePicturePath();
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user.profilePicture) return res.status(400).json({ success: false, message: "No profile picture to delete" });
+
+    const profilePicsDir = uploadsConfig.getProfilePicturePath();
     const filename = user.profilePicture.split('/').pop();
     const imagePath = path.join(profilePicsDir, filename);
     
@@ -102,7 +110,7 @@ exports.deleteProfilePicture = async (req, res) => {
     res.status(200).json({ success: true, message: 'Profile picture deleted' });
   } catch (error) {
     console.error("Delete profile picture error:", error);
-    res.status(500).send("Failed to delete profile picture");
+    res.status(500).json({ success: false, message: "Failed to delete profile picture" });
   }
 };
 
@@ -260,7 +268,6 @@ const badhabit =require('../models/BadHabitModel');
 const habit= require('../models/HabitModel');
 const distractions= require('../models/distractionModel');
 const friend =require('../models/FriendModel');
-const sharedhabit=require('../models/HabitModel');
 const notifications=require('../models/NotificationModel');
 
 exports.deleteAccount = async (req, res) => {
@@ -272,13 +279,21 @@ exports.deleteAccount = async (req, res) => {
       });
     }
 
-   
      await badhabit.deleteMany({ userId: req.userId });
      await habit.deleteMany({ userId: req.userId });
      await distractions.deleteMany({ userId: req.userId });
-     await friend.deleteMany({ userId: req.userId });
-     await sharedhabit.deleteMany({ userId: req.userId });
-     await notifications.deleteMany({ userId: req.userId });
+     await friend.deleteMany({
+       $or: [
+         { requester: req.userId },
+         { recipient: req.userId }
+       ]
+     });
+     await notifications.deleteMany({
+       $or: [
+         { recipientId: req.userId },
+         { senderId: req.userId }
+       ]
+     });
      
     const user = await User.findByIdAndDelete(req.userId);
           if (!user) {

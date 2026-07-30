@@ -2,6 +2,9 @@ const Distraction = require('../models/distractionModel');
 const mongoose = require('mongoose');
 const { startOfDay, endOfDay, subDays, subWeeks, subMonths, subYears } = require('date-fns');
 
+const VALID_CATEGORIES = ['Social Media', 'Environment', 'Health', 'Mood', 'Lack of Time', 'Other'];
+const SEVERITY_RANGE = { min: 1, max: 5 };
+
 // Helper function for time ranges with proper date handling
 const calculateTimeRange = (timeframe) => {
   const now = new Date();
@@ -50,16 +53,15 @@ exports.logDistraction = async (req, res) => {
     }
 
     // Validate severity range
-    if (severity < 1 || severity > 5) {
+    if (severity < SEVERITY_RANGE.min || severity > SEVERITY_RANGE.max) {
       return res.status(400).json({
         success: false,
-        message: 'Severity must be between 1 and 5'
+        message: `Severity must be between ${SEVERITY_RANGE.min} and ${SEVERITY_RANGE.max}`
       });
     }
 
     // Validate category
-    const validCategories = ['Social Media', 'Environment', 'Health', 'Mood', 'Lack of Time', 'Other'];
-    if (!validCategories.includes(category)) {
+    if (!VALID_CATEGORIES.includes(category)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid category'
@@ -146,16 +148,15 @@ exports.updateDistraction = async (req, res) => {
     });
 
     // Validate updates if provided
-    if (filteredUpdates.severity && (filteredUpdates.severity < 1 || filteredUpdates.severity > 5)) {
+    if (filteredUpdates.severity && (filteredUpdates.severity < SEVERITY_RANGE.min || filteredUpdates.severity > SEVERITY_RANGE.max)) {
       return res.status(400).json({
         success: false,
-        message: 'Severity must be between 1 and 5'
+        message: `Severity must be between ${SEVERITY_RANGE.min} and ${SEVERITY_RANGE.max}`
       });
     }
 
     if (filteredUpdates.category) {
-      const validCategories = ['Social Media', 'Environment', 'Health', 'Mood', 'Lack of Time', 'Other'];
-      if (!validCategories.includes(filteredUpdates.category)) {
+      if (!VALID_CATEGORIES.includes(filteredUpdates.category)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid category'
