@@ -7,6 +7,11 @@ const { registerValidation, loginValidation } = require("../util/validators");
 exports.register = async (req, res) => {
     const { name, surname, email, password } = req.body; 
 
+    const { error } = registerValidation.validate(req.body);
+    if (error) {
+        return res.status(400).json({ message: error.details[0].message });
+    }
+
     try {
         const existingUser = await User.findOne({ email });
         if (existingUser) {
@@ -22,12 +27,7 @@ exports.register = async (req, res) => {
             password: hashedPassword 
         });
 
-        console.log("🔹 New User Registered:");
-        console.log(`User ID: ${user._id}`);
-        console.log(`Name: ${user.name}`);
-        console.log(`Surname: ${user.surname}`);
-        console.log(`Email: ${user.email}`);
-        console.log(`Hashed Password: ${user.password}`); 
+
         res.status(201).json({
             message: "User registered successfully.",
             userId: user._id,
@@ -41,6 +41,11 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
     const { email, password } = req.body;
 
+    const { error } = loginValidation.validate(req.body);
+    if (error) {
+        return res.status(400).json({ message: error.details[0].message });
+    }
+
     try {
         const user = await User.findOne({ email });
 
@@ -50,12 +55,7 @@ exports.login = async (req, res) => {
 
         const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
 
-        console.log("\n✅ User Logged In Successfully:");
-        console.log(`User ID: ${user._id}`);
-        console.log(`Name: ${user.name}`);
-        console.log(`Surname: ${user.surname}`);
-        console.log(`Email: ${user.email}`);
-        console.log(`Generated Token: ${token}`);
+
 
         res.status(200).json({
             message: "Login successful",

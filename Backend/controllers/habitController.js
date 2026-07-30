@@ -165,38 +165,7 @@ const parseLocalDate = (dateInput) => {
   return date;
 };
 
-function hasScheduleChanged(oldHabit, newData) {
-  const scheduleFields = [
-    'startDate',
-    'endDate',
-    'repeat',
-    'repeatDays',
-    'frequency',
-    'repeatCount',
-    'selectedMonthlyDates',
-    'reminderOffsets'
-  ];
 
-  return scheduleFields.some(field => {
-    if (newData[field] === undefined) return false;
-    
-    const oldValue = oldHabit[field];
-    const newValue = newData[field];
-    
-    // مقارنة القيم مع مراعاة التواريخ
-    if (oldValue instanceof Date || newValue instanceof Date) {
-      return oldValue?.getTime() !== newValue?.getTime();
-    }
-    
-    // مقارنة المصفوفات
-    if (Array.isArray(oldValue) && Array.isArray(newValue)) {
-      return JSON.stringify(oldValue) !== JSON.stringify(newValue);
-    }
-    
-    // المقارنة العادية
-    return oldValue !== newValue;
-  });
-}
 // --- Final Fix: Repeat Dates as plain strings (no timezone bugs) ---
 const calculateRepeatDates = (
   startDate,
@@ -211,12 +180,7 @@ const calculateRepeatDates = (
   const repeatDates = [];
   const reminders = [];
 
-  // Helper to parse date strings as local dates
-  const parseLocalDate = (dateStr) => {
-    if (dateStr instanceof Date) return new Date(dateStr);
-    const [year, month, day] = dateStr.split('-').map(Number);
-    return new Date(year, month - 1, day);
-  };
+
 
   // Parse dates as local dates (no timezone conversion)
   const parsedStartDate = parseLocalDate(startDate);

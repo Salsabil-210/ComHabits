@@ -89,18 +89,16 @@ const connectedUsers = new Map(); // Using Map for better performance
 
 io.on('connection', (socket) => {
   console.log('🔌 New client connected:', socket.id);
-  console.log('🔵 New connection:', socket.id);
 
   socket.on('authenticate', async (token, callback) => {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const userId = decoded.userId;
+      const userId = decoded.id;
       
       // Store the socket ID for this user
       connectedUsers.set(userId, socket.id);
       socket.join(`user_${userId}`);
       
-      console.log(`🟢 Authenticated user ${decoded.userId}`);
       console.log(`✅ User ${userId} authenticated`);
       
       // Deliver any pending notifications
@@ -114,8 +112,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
-    console.log('⚪ Disconnected:', socket.id);
+    console.log(`⚪ Disconnected: ${socket.id}`);
 
     // Clean up disconnected users
     for (const [userId, socketId] of connectedUsers.entries()) {

@@ -12,8 +12,7 @@ const mongoose = require('mongoose');
 // Create a shared habit request
 exports.createSharedHabitRequest = async (req, res) => {
   console.log('[sharedHabitController] createSharedHabitRequest initiated');
-  console.log('[sharedHabitController] Request body:', req.body);
-  console.log('[sharedHabitController] User ID from token:', req.userId);
+
 
   try {
     // Validate JSON structure first
@@ -120,9 +119,9 @@ exports.createSharedHabitRequest = async (req, res) => {
       }]
     };
 
-    console.log('[sharedHabitController] Habit data to create:', habitData);
+
     const habit = await Habit.create(habitData);
-    console.log('[sharedHabitController] Habit created:', habit);
+
 
     // Create a notification for the recipient
     console.log('[sharedHabitController] Creating notification...');
@@ -151,9 +150,9 @@ exports.createSharedHabitRequest = async (req, res) => {
       }
     };
 
-    console.log('[sharedHabitController] Notification data:', notificationData);
+
     const notification = await Notification.create(notificationData);
-    console.log('[sharedHabitController] Notification created:', notification);
+
 
     // Update recipient's notifications
     console.log('[sharedHabitController] Updating recipient notifications...');
@@ -200,7 +199,7 @@ exports.createSharedHabitRequest = async (req, res) => {
 
 // Accept a shared habit request
 exports.acceptSharedHabit = async (req, res) => {
-  console.log('[acceptSharedHabit] Initiated for habitId:', req.params.habitId, 'by userId:', req.userId);
+
   const session = await mongoose.startSession();
   session.startTransaction();
   console.log('[acceptSharedHabit] Mongoose session started.');
@@ -437,9 +436,7 @@ exports.rejectSharedHabit = async (req, res) => {
 // Update a shared habit
 exports.updateSharedHabit = async (req, res) => {
   console.log('[sharedHabitController] updateSharedHabit initiated');
-  console.log('[sharedHabitController] Habit ID:', req.params.habitId);
-  console.log('[sharedHabitController] Request body:', req.body);
-  console.log('[sharedHabitController] User ID from token:', req.userId);
+
 
   try {
     const { habitId } = req.params;
@@ -494,7 +491,7 @@ exports.updateSharedHabit = async (req, res) => {
       { new: true }
     );
 
-    console.log('[sharedHabitController] Habit updated:', updatedHabit);
+
 
     // If this is a participant's copy, also update the original if owner is updating
     if (habit.sharedHabitId && isParticipant) {
