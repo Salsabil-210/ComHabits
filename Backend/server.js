@@ -15,6 +15,7 @@ const mongoSanitize = require('express-mongo-sanitize');
 const hpp = require('hpp');
 
 dotenv.config();
+require("./config/auth");
 
 // Initialize Express app
 const app = express();
@@ -185,31 +186,8 @@ app.use((req, res, next) => {
 });
 
 // Global Error Handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  
-  // Handle JWT errors
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({ 
-      success: false,
-      message: "Invalid token"
-    });
-  }
-
-  // Handle validation errors
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({ 
-      success: false,
-      message: err.message
-    });
-  }
-
-  res.status(500).json({ 
-    success: false,
-    message: "Internal Server Error",
-    error: process.env.NODE_ENV === "development" ? err.message : undefined
-  });
-});
+const { errorHandler } = require("./middleware/errorMiddleware");
+app.use(errorHandler);
 
 // Server startup
 const PORT = process.env.PORT || 3000;

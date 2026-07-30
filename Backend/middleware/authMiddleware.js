@@ -1,17 +1,25 @@
 const jwt = require("jsonwebtoken");
+const authConfig = require("../config/auth");
+const redis = require("../util/redis");
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
     const token = req.header("Authorization")?.replace("Bearer ", "");
     if (!token) {
         return res.status(401).json({ message: "Access denied. No token provided." });
     }
 
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        // Check if token is blacklisted in Redis
+        const isRevoked = await redis.get(`blacklist:${token}`);
+        if (isRevoked) {
+            return res.status(401).json({ message: "Token has been revoked." });
+        }
 
-        // هذا اللي نضيفه عشان الكود في controller ما يعطي undefined
+        const decoded = jwt.verify(token, authConfig.jwt.secret);
+
         req.userId = decoded.id;
-        req.user = { _id: decoded.id }; // ✅ عشان يتوافق مع req.user._id
+        req.user = { _id: decoded.id };
+        req.token = token;
 
         next();
     } catch (error) {

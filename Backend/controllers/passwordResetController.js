@@ -30,8 +30,8 @@ exports.forgotPassword = async (req, res) => {
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: process.env.FROM_EMAIL, 
-        pass: process.env.GMAIL_APP_PASSWORD, 
+        user: process.env.FROM_EMAIL,
+        pass: process.env.GMAIL_APP_PASSWORD,
       },
     });
 
@@ -98,7 +98,7 @@ exports.setNewPassword = async (req, res) => {
 
     if (!strictPasswordRegex.test(newPassword)) {
       return res.status(400).json({
-      message: "Password must be 6-20 characters, contain at least one letter, and not be only digits or symbols."
+        message: "Password must be 6-20 characters, contain at least one letter, and not be only digits or symbols."
       });
     }
 

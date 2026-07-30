@@ -15,9 +15,9 @@ export const validateFutureDatesOnly = (dates, referenceDate = new Date()) => {
 export const isFutureOrToday = (date) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  
+
   const checkDate = new Date(date);
   checkDate.setHours(0, 0, 0, 0);
-  
+
   return !isBefore(checkDate, today) || isSameDay(checkDate, today);
 };
