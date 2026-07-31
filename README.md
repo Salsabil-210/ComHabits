@@ -1,10 +1,10 @@
-# ComHabits 🤝📈
+# ComHabits 
 
 ComHabits is a community-driven, collaborative habit tracking application designed to help individuals build positive habits, break bad ones, and stay accountable alongside friends. The system consists of a robust **Express/Node.js/MongoDB Backend** with real-time WebSocket communication and a cross-platform **Expo React Native Frontend**.
 
 ---
 
-## 🚀 Key Features
+##  Key Features
 
 * **Dual Habit Tracking:** Track personal daily/weekly/monthly routines as well as bad habits with customized streak recovery algorithms.
 * **Collaborative (Shared) Habits:** Share habits with friends. Track combined progress, streaks, and completions in real-time.
@@ -33,7 +33,7 @@ ComHabits is a community-driven, collaborative habit tracking application design
 
 ---
 
-## 📁 Repository Structure
+##  Repository Structure
 
 ```
 ComHabits/
@@ -89,7 +89,7 @@ npm start
 
 ---
 
-## 📱 Frontend Setup
+##  Frontend Setup
 
 Configure your local IP/environment for local debugging.
 
@@ -106,7 +106,7 @@ npx expo start
 
 ---
 
-## 💻 Unified Local Development
+##  Unified Local Development
 
 You can run both the Backend server and Frontend Expo client simultaneously from the `Backend` directory using the root concurrency setup:
 
@@ -117,7 +117,7 @@ npm run dev
 
 ---
 
-## 🔒 Security & Refactoring Standards
+##  Security & Refactoring Standards
 
 This project has been updated to follow top-tier production architectural standards:
 * **No Credential Logging:** Secrets (passwords/tokens) are never logged to console outputs.
