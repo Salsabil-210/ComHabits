@@ -1,62 +1,34 @@
 const Habit = require("../models/HabitModel");
 const User = require("../models/UserModel");
 const { zonedTimeToUtc } = require('date-fns-tz');
-const { format,isBefore, parseISO, isValid, isToday, isAfter, isSameDay } = require("date-fns");
+const { format, isBefore, parseISO, isValid, isToday, isAfter, isSameDay } = require("date-fns");
 const { createHabitValidation, updateHabitValidation } = require("../util/habitValidators");
 const mongoose = require('mongoose');
+const { safeParseDate, convertDateFields, calculateCurrentStreak } = require('../util/dateUtils');
 
 
 // --- Date Validation ---
-// Updated validateDates function with consistent date parsing
+// Uses shared safeParseDate from util/dateUtils.js (consolidated from 3 duplicates)
 const validateDates = (startDate, endDate, reminders, repeat, repeatDays, selectedMonthlyDates) => {
   const now = new Date();
   now.setHours(0, 0, 0, 0); // Normalize to start of day
 
-  // Helper function for safe date parsing
-  const safeParseDatee = (dateInput) => {
-    if (!dateInput) return null;
-    
-    if (dateInput instanceof Date) {
-      const date = new Date(dateInput);
-      date.setHours(0, 0, 0, 0);
-      return date;
-    }
-    
-    if (typeof dateInput === 'string') {
-      // Handle ISO string format
-      if (dateInput.includes('T')) {
-        const date = new Date(dateInput);
-        if (isNaN(date.getTime())) throw new Error(`Invalid date format: ${dateInput}`);
-        date.setHours(0, 0, 0, 0);
-        return date;
-      }
-      
-      // Handle YYYY-MM-DD format
-      const [year, month, day] = dateInput.split('-').map(Number);
-      if (year && month && day) {
-        return new Date(year, month - 1, day);
-      }
-    }
-    
-    throw new Error(`Invalid date format: ${dateInput}`);
-  };
-
   if (startDate) {
-    const parsedStartDate = safeParseDatee(startDate);
+    const parsedStartDate = safeParseDate(startDate, { normalize: true });
     if (isBefore(parsedStartDate, now) && !isToday(parsedStartDate)) {
       throw new Error("Start date cannot be in the past (except today)");
     }
   }
 
   if (endDate) {
-    const parsedEndDate = safeParseDatee(endDate);
-    const parsedStartDate = startDate ? safeParseDatee(startDate) : null;
+    const parsedEndDate = safeParseDate(endDate, { normalize: true });
+    const parsedStartDate = startDate ? safeParseDate(startDate, { normalize: true }) : null;
     if (parsedStartDate && isBefore(parsedEndDate, parsedStartDate)) {
       throw new Error("End date must be after the start date");
     }
   }
 
-  // Rest of validation logic...
+  // Reminder validation
   if (reminders && reminders.length > 0) {
     const uniqueReminders = new Set(reminders);
     if (uniqueReminders.size !== reminders.length) {
@@ -64,20 +36,20 @@ const validateDates = (startDate, endDate, reminders, repeat, repeatDays, select
     }
     
     for (const reminder of reminders) {
-      const parsedReminder = safeParseDatee(reminder);
+      const parsedReminder = safeParseDate(reminder, { normalize: true });
       if (isBefore(parsedReminder, now) && !isToday(parsedReminder)) {
         throw new Error("Reminders cannot be in the past (except today)");
       }
       
       if (startDate) {
-        const parsedStartDate = safeParseDatee(startDate);
+        const parsedStartDate = safeParseDate(startDate, { normalize: true });
         if (isBefore(parsedReminder, parsedStartDate)) {
           throw new Error("Reminders must be after the start date");
         }
       }
       
       if (endDate) {
-        const parsedEndDate = safeParseDatee(endDate);
+        const parsedEndDate = safeParseDate(endDate, { normalize: true });
         if (isBefore(parsedEndDate, parsedReminder)) {
           throw new Error("Reminders cannot be after the end date");
         }
@@ -108,62 +80,36 @@ const validateDates = (startDate, endDate, reminders, repeat, repeatDays, select
     }
     
     for (const dateStr of selectedMonthlyDates) {
-      const date = safeParseDatee(dateStr);
+      const date = safeParseDate(dateStr, { normalize: true });
       if (isBefore(date, now) && !isSameDay(date, now)) {
         throw new Error("Cannot select past dates for monthly repetition (except today)");
       }
       
       if (startDate) {
-        const parsedStartDate = safeParseDatee(startDate);
+        const parsedStartDate = safeParseDate(startDate, { normalize: true });
         if (isBefore(date, parsedStartDate)) {
           throw new Error("Monthly dates cannot be before the habit start date");
         }
       }
       
       if (endDate) {
-        const parsedEndDate = safeParseDatee(endDate);
+        const parsedEndDate = safeParseDate(endDate, { normalize: true });
         if (isAfter(date, parsedEndDate)) {
           throw new Error("Monthly dates cannot be after the habit end date");
         }
       }
     }
     
-    const uniqueDates = new Set(selectedMonthlyDates.map(d => safeParseDatee(d).toISOString().split('T')[0]));
+    const uniqueDates = new Set(selectedMonthlyDates.map(d => safeParseDate(d, { normalize: true }).toISOString().split('T')[0]));
     if (uniqueDates.size !== selectedMonthlyDates.length) {
       throw new Error("Monthly dates must be unique");
     }
   }
 };
 
-// --- Helper to safely parse YYYY-MM-DD into a local date ---
-const parseLocalDate = (dateInput) => {
-  if (!dateInput) return null;
-  
-  // If already a Date object, create a new one to avoid mutation
-  if (dateInput instanceof Date) {
-    return new Date(dateInput);
-  }
-  
-  // If it's a string, parse it properly
-  if (typeof dateInput === 'string') {
-    // Handle ISO string format
-    if (dateInput.includes('T')) {
-      return new Date(dateInput);
-    }
-    // Handle YYYY-MM-DD format
-    const [year, month, day] = dateInput.split('-').map(Number);
-    if (year && month && day) {
-      return new Date(year, month - 1, day); // month is 0-based
-    }
-  }
-  
-  // Fallback - try direct Date construction
-  const date = new Date(dateInput);
-  if (isNaN(date.getTime())) {
-    throw new Error(`Invalid date format: ${dateInput}`);
-  }
-  return date;
-};
+// parseLocalDate is now consolidated into safeParseDate in util/dateUtils.js
+// Alias maintained for backward compatibility within this module
+const parseLocalDate = safeParseDate;
 
 
 // --- Final Fix: Repeat Dates as plain strings (no timezone bugs) ---
@@ -477,32 +423,7 @@ exports.updateHabit = async (req, res) => {
     }
 
     // Convert date strings to Date objects for database storage
-    const convertDateFields = (data) => {
-      const dateFields = ['startDate', 'endDate'];
-      const converted = { ...data };
-      dateFields.forEach(field => {
-        if (converted[field]) {
-          try {
-            if (typeof converted[field] === 'string') {
-              if (converted[field].includes('T')) {
-                converted[field] = new Date(converted[field]);
-              } else {
-                const [year, month, day] = converted[field].split('-').map(Number);
-                converted[field] = new Date(year, month - 1, day);
-              }
-            }
-            if (isNaN(converted[field].getTime())) {
-              throw new Error(`Invalid ${field} format`);
-            }
-          } catch (error) {
-            throw new Error(`Invalid ${field}: ${error.message}`);
-          }
-        }
-      });
-      return converted;
-    };
-
-    // Convert dates in updateData
+    // Uses shared convertDateFields from util/dateUtils.js
     const processedUpdateData = convertDateFields(updateData);
 
     // Validate update data
@@ -1038,46 +959,5 @@ exports.getHabitStats = async (req, res) => {
   }
 };
 
-// --- Utility: Calculate Current Streak ---
-function calculateCurrentStreak(completionDates) {
-  if (!completionDates || completionDates.length === 0) return 0;
-  const sortedDates = [...completionDates]
-    .map(d => new Date(d))
-    .sort((a, b) => b - a); // Sort in descending order (most recent first)
-
-  let streak = 0;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  // Check if today's habit is completed
-  let isTodayCompleted = false;
-  if (sortedDates.length > 0 && isSameDay(sortedDates[0], today)) {
-    streak = 1;
-    isTodayCompleted = true;
-  } else if (sortedDates.length > 0 && isSameDay(sortedDates[0], new Date(today.setDate(today.getDate() - 1)))) {
-    // If today is not completed, but yesterday was, streak continues from yesterday
-    streak = 1;
-  } else {
-    return 0; // No streak if today or yesterday wasn't completed
-  }
-
-  let previousDay = new Date(sortedDates[0]);
-  previousDay.setHours(0, 0, 0, 0);
-
-  for (let i = 1; i < sortedDates.length; i++) {
-    const currentDay = new Date(sortedDates[i]);
-    currentDay.setHours(0, 0, 0, 0);
-
-    const dayBeforePrevious = new Date(previousDay);
-    dayBeforePrevious.setDate(previousDay.getDate() - 1);
-
-    if (isSameDay(currentDay, dayBeforePrevious)) {
-      streak++;
-    } else if (currentDay < dayBeforePrevious) {
-      // If there's a gap, the streak breaks
-      break;
-    }
-    previousDay = currentDay;
-  }
-  return streak;
-}
+// calculateCurrentStreak is now imported from util/dateUtils.js
+// This eliminates the duplicate that existed in sharedHabitController.js

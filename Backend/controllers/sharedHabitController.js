@@ -6,12 +6,26 @@ const friendService = require('../services/friendService');
 const { isBefore, parseISO, isValid, isToday, isAfter, isSameDay } = require("date-fns");
 const { createHabitValidation, updateHabitValidation } = require("../util/habitValidators");
 const notificationController = require('./notificationController');
+const mongoose = require('mongoose');
+const { withTransaction } = require('../util/withTransaction');
+const { calculateCurrentStreak } = require('../util/dateUtils');
 
-const mongoose = require('mongoose'); 
+/**
+ * Check if a user is the owner or an accepted participant of a shared habit.
+ * @param {Object} habit - The habit document
+ * @param {string} userId - The user ID to check
+ * @returns {{ isOwner: boolean, isParticipant: boolean }} Authorization result
+ */
+const checkSharedHabitAuthorization = (habit, userId) => {
+  const isOwner = habit.userId.toString() === userId.toString();
+  const isParticipant = habit.sharedWith.some(
+    entry => entry.userId.toString() === userId.toString() && entry.status === "accepted"
+  );
+  return { isOwner, isParticipant };
+};
 
 // Create a shared habit request
 exports.createSharedHabitRequest = async (req, res) => {
-  console.log('[sharedHabitController] createSharedHabitRequest initiated');
 
 
   try {
@@ -19,7 +33,7 @@ exports.createSharedHabitRequest = async (req, res) => {
     try {
       JSON.parse(JSON.stringify(req.body));
     } catch (jsonError) {
-      console.error('[sharedHabitController] Invalid JSON format:', jsonError);
+
       return res.status(400).json({ 
         success: false,
         message: "Invalid JSON format in request body",
@@ -31,7 +45,6 @@ exports.createSharedHabitRequest = async (req, res) => {
 
     // Validate required fields
     if (!name || !recipient) {
-      console.error('[sharedHabitController] Missing required fields');
       return res.status(400).json({ 
         success: false,
         message: "Name and recipient are required fields" 
@@ -39,9 +52,7 @@ exports.createSharedHabitRequest = async (req, res) => {
     }
 
     // Validate recipient exists
-    console.log('[sharedHabitController] Checking recipient...');
     if (recipient === req.userId.toString()) {
-      console.error('[sharedHabitController] Cannot share habit with yourself');
       return res.status(400).json({ 
         success: false,
         message: "Cannot share habit with yourself" 
@@ -50,7 +61,6 @@ exports.createSharedHabitRequest = async (req, res) => {
 
     const recipientUser = await User.findById(recipient);
     if (!recipientUser) {
-      console.error('[sharedHabitController] Recipient not found with ID:', recipient);
       return res.status(404).json({ 
         success: false,
         message: "Recipient user not found" 
@@ -58,11 +68,9 @@ exports.createSharedHabitRequest = async (req, res) => {
     }
 
     // Check friendship status using friendService
-    console.log('[sharedHabitController] Checking friendship status...');
     try {
       await friendService.validateCanShare(req.userId, recipient);
     } catch (error) {
-      console.error('[sharedHabitController] Friendship validation error:', error.message);
       return res.status(403).json({ 
         success: false,
         message: error.message 
@@ -70,7 +78,6 @@ exports.createSharedHabitRequest = async (req, res) => {
     }
 
     // Check for existing pending request for the same habit
-    console.log('[sharedHabitController] Checking for existing requests for the same habit...');
     const existingRequest = await Habit.findOne({
       userId: req.userId,
       type: "shared",
@@ -81,7 +88,6 @@ exports.createSharedHabitRequest = async (req, res) => {
     });
 
     if (existingRequest) {
-      console.error('[sharedHabitController] Existing pending request found for the same habit');
       return res.status(409).json({ 
         success: false,
         message: "You already have a pending shared habit request with this user for the same habit",
@@ -94,7 +100,7 @@ exports.createSharedHabitRequest = async (req, res) => {
     }
 
     // Create the habit with pending status
-    console.log('[sharedHabitController] Creating shared habit...');
+
     const habitData = {
       userId: req.userId,
       name,
@@ -124,10 +130,8 @@ exports.createSharedHabitRequest = async (req, res) => {
 
 
     // Create a notification for the recipient
-    console.log('[sharedHabitController] Creating notification...');
     const requestingUser = await User.findById(req.userId).select('name profilePicture');
     if (!requestingUser) {
-      console.error('[sharedHabitController] Requesting user not found');
       return res.status(404).json({ 
         success: false,
         message: "User not found" 
@@ -155,7 +159,6 @@ exports.createSharedHabitRequest = async (req, res) => {
 
 
     // Update recipient's notifications
-    console.log('[sharedHabitController] Updating recipient notifications...');
     await User.findByIdAndUpdate(recipient, { 
       $push: { 
         notifications: {
@@ -165,7 +168,6 @@ exports.createSharedHabitRequest = async (req, res) => {
       } 
     });
 
-    console.log('[sharedHabitController] Shared habit request completed successfully');
     res.status(201).json({ 
       success: true,
       message: "Shared habit request sent successfully", 
@@ -199,124 +201,106 @@ exports.createSharedHabitRequest = async (req, res) => {
 
 // Accept a shared habit request
 exports.acceptSharedHabit = async (req, res) => {
-
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  console.log('[acceptSharedHabit] Mongoose session started.');
-
   try {
     const { habitId } = req.params;
 
-    // 1. Find and validate original habit
-    const originalHabit = await Habit.findById(habitId).session(session);
-    if (!originalHabit) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Habit request not found or already processed"
-      });
-    }
-
-    if (originalHabit.type !== "shared" || originalHabit.status !== "pending") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "This is not a pending shared habit request."
-      });
-    }
-
-    // 2. Check sharedWith status
-    const sharedWithEntry = originalHabit.sharedWith.find(
-      entry => entry.userId.toString() === req.userId.toString()
-    );
-
-    if (!sharedWithEntry || sharedWithEntry.status !== "pending") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({
-        success: false,
-        message: "No pending habit request found for this user or already accepted/rejected."
-      });
-    }
-
-    // 3. Update sharedWith status to accepted
-    await Habit.findByIdAndUpdate(
-      habitId,
-      {
-        status: "active",
-        $set: {
-          "sharedWith.$.status": "accepted",
-          "sharedWith.$.acceptedAt": new Date()
-        }
-      },
-      { session }
-    ).where("sharedWith.userId").equals(req.userId);
-
-    // 4. Create notification for original sender
-    const acceptingUser = await User.findById(req.userId).session(session);
-    if (!acceptingUser) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Accepting user not found"
-      });
-    }
-
-    const notificationData = {
-      recipientId: originalHabit.userId,
-      senderId: req.userId,
-      type: "habit_shared_accepted",
-      message: `${acceptingUser.name} accepted your shared habit: ${originalHabit.name}`,
-      relatedHabitId: originalHabit._id,
-      status: "unread",
-      isActionable: false,
-      metadata: {
-        habitName: originalHabit.name,
-        acceptorName: acceptingUser.name,
-        acceptorImage: acceptingUser.profilePicture
+    const { notification, updatedOriginalHabit } = await withTransaction(async (session) => {
+      // 1. Find and validate original habit
+      const originalHabit = await Habit.findById(habitId).session(session);
+      if (!originalHabit) {
+        const err = new Error("Habit request not found or already processed");
+        err.statusCode = 404;
+        throw err;
       }
-    };
 
-    const notification = await Notification.create([notificationData], { session });
+      if (originalHabit.type !== "shared" || originalHabit.status !== "pending") {
+        const err = new Error("This is not a pending shared habit request.");
+        err.statusCode = 400;
+        throw err;
+      }
 
-    await User.findByIdAndUpdate(
-      originalHabit.userId,
-      {
-        $push: {
-          notifications: {
-            $each: [notification[0]._id],
-            $position: 0
+      // 2. Check sharedWith status
+      const sharedWithEntry = originalHabit.sharedWith.find(
+        entry => entry.userId.toString() === req.userId.toString()
+      );
+
+      if (!sharedWithEntry || sharedWithEntry.status !== "pending") {
+        const err = new Error("No pending habit request found for this user or already accepted/rejected.");
+        err.statusCode = 403;
+        throw err;
+      }
+
+      // 3. Update sharedWith status to accepted
+      await Habit.findByIdAndUpdate(
+        habitId,
+        {
+          status: "active",
+          $set: {
+            "sharedWith.$.status": "accepted",
+            "sharedWith.$.acceptedAt": new Date()
           }
+        },
+        { session }
+      ).where("sharedWith.userId").equals(req.userId);
+
+      // 4. Create notification for original sender
+      const acceptingUser = await User.findById(req.userId).session(session);
+      if (!acceptingUser) {
+        const err = new Error("Accepting user not found");
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const notificationData = {
+        recipientId: originalHabit.userId,
+        senderId: req.userId,
+        type: "habit_shared_accepted",
+        message: `${acceptingUser.name} accepted your shared habit: ${originalHabit.name}`,
+        relatedHabitId: originalHabit._id,
+        status: "unread",
+        isActionable: false,
+        metadata: {
+          habitName: originalHabit.name,
+          acceptorName: acceptingUser.name,
+          acceptorImage: acceptingUser.profilePicture
         }
-      },
-      { session }
-    );
+      };
 
-    await session.commitTransaction();
-    session.endSession();
+      const notif = await Notification.create([notificationData], { session });
 
-    const updatedOriginalHabit = await Habit.findById(habitId);
+      await User.findByIdAndUpdate(
+        originalHabit.userId,
+        {
+          $push: {
+            notifications: {
+              $each: [notif[0]._id],
+              $position: 0
+            }
+          }
+        },
+        { session }
+      );
+
+      return { notification: notif[0], updatedOriginalHabit: await Habit.findById(habitId) };
+    });
 
     res.status(200).json({
       success: true,
       message: "Shared habit accepted successfully",
       originalHabit: updatedOriginalHabit,
       notification: {
-        id: notification[0]._id,
-        message: notification[0].message
+        id: notification._id,
+        message: notification.message
       }
     });
 
   } catch (error) {
-    console.error('[acceptSharedHabit] ERROR:', error);
-    await session.abortTransaction();
-    session.endSession();
-    res.status(500).json({
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
       success: false,
-      message: "An unexpected server error occurred during habit acceptance.",
+      message: statusCode === 500 
+        ? "An unexpected server error occurred during habit acceptance." 
+        : error.message,
       error: process.env.NODE_ENV === 'development' ? {
         message: error.message,
         stack: error.stack
@@ -327,104 +311,88 @@ exports.acceptSharedHabit = async (req, res) => {
 
 // Reject a shared habit request
 exports.rejectSharedHabit = async (req, res) => {
-  console.log('[sharedHabitController] rejectSharedHabit initiated');
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     const { habitId } = req.params;
 
-    // Find the original habit
-    console.log('[sharedHabitController] Finding original habit...');
-    const originalHabit = await Habit.findById(habitId).session(session);
-    if (!originalHabit) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ 
-        success: false,
-        message: "Habit not found" 
-      });
-    }
-
-    // Check if the current user is the intended recipient
-    console.log('[sharedHabitController] Checking recipient status...');
-    const sharedWithUser = originalHabit.sharedWith.find(
-      entry => entry.userId.toString() === req.userId.toString()
-    );
-
-    if (!sharedWithUser || sharedWithUser.status !== "pending") {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({ 
-        success: false,
-        message: "No pending habit request found for this user" 
-      });
-    }
-
-    // Update both the sharedWith status AND the main habit status
-    await Habit.findByIdAndUpdate(
-      habitId,
-      { 
-        $set: { 
-          status: "rejected",
-          "sharedWith.$.status": "rejected",
-          "sharedWith.$.rejectedAt": new Date()
-        } 
-      },
-      { session }
-    ).where("sharedWith.userId").equals(req.userId);
-
-    // Create a rejection notification
-    const rejectingUser = await User.findById(req.userId).session(session);
-    if (!rejectingUser) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ 
-        success: false,
-        message: "User not found" 
-      });
-    }
-
-    const notificationData = {
-      recipientId: originalHabit.userId,
-      senderId: req.userId,
-      type: "habit_shared_rejected",
-      message: `${rejectingUser.name} rejected your shared habit: ${originalHabit.name}`,
-      relatedHabitId: habitId,
-      status: "unread",
-      metadata: {
-        habitName: originalHabit.name,
-        rejectorName: rejectingUser.name
+    const { notification } = await withTransaction(async (session) => {
+      // Find the original habit
+      const originalHabit = await Habit.findById(habitId).session(session);
+      if (!originalHabit) {
+        const err = new Error("Habit not found");
+        err.statusCode = 404;
+        throw err;
       }
-    };
 
-    const notification = await Notification.create([notificationData], { session });
+      // Check if the current user is the intended recipient
+      const sharedWithUser = originalHabit.sharedWith.find(
+        entry => entry.userId.toString() === req.userId.toString()
+      );
 
-    await User.findByIdAndUpdate(
-      originalHabit.userId,
-      { $push: { notifications: notification[0]._id } },
-      { session }
-    );
+      if (!sharedWithUser || sharedWithUser.status !== "pending") {
+        const err = new Error("No pending habit request found for this user");
+        err.statusCode = 403;
+        throw err;
+      }
 
-    await session.commitTransaction();
-    session.endSession();
+      // Update both the sharedWith status AND the main habit status
+      await Habit.findByIdAndUpdate(
+        habitId,
+        { 
+          $set: { 
+            status: "rejected",
+            "sharedWith.$.status": "rejected",
+            "sharedWith.$.rejectedAt": new Date()
+          } 
+        },
+        { session }
+      ).where("sharedWith.userId").equals(req.userId);
+
+      // Create a rejection notification
+      const rejectingUser = await User.findById(req.userId).session(session);
+      if (!rejectingUser) {
+        const err = new Error("User not found");
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const notificationData = {
+        recipientId: originalHabit.userId,
+        senderId: req.userId,
+        type: "habit_shared_rejected",
+        message: `${rejectingUser.name} rejected your shared habit: ${originalHabit.name}`,
+        relatedHabitId: habitId,
+        status: "unread",
+        metadata: {
+          habitName: originalHabit.name,
+          rejectorName: rejectingUser.name
+        }
+      };
+
+      const notif = await Notification.create([notificationData], { session });
+
+      await User.findByIdAndUpdate(
+        originalHabit.userId,
+        { $push: { notifications: notif[0]._id } },
+        { session }
+      );
+
+      return { notification: notif[0] };
+    });
 
     res.status(200).json({
       success: true,
       message: "Shared habit rejected successfully",
       notification: {
-        id: notification[0]._id,
-        message: notification[0].message
+        id: notification._id,
+        message: notification.message
       }
     });
 
   } catch (error) {
-    console.error('[sharedHabitController] Error rejecting shared habit:', error);
-    await session.abortTransaction();
-    session.endSession();
-    res.status(500).json({
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
       success: false,
-      message: "Server error during rejection",
+      message: statusCode === 500 ? "Server error during rejection" : error.message,
       error: process.env.NODE_ENV === 'development' ? {
         message: error.message,
         stack: error.stack
@@ -435,39 +403,27 @@ exports.rejectSharedHabit = async (req, res) => {
 
 // Update a shared habit
 exports.updateSharedHabit = async (req, res) => {
-  console.log('[sharedHabitController] updateSharedHabit initiated');
-
-
   try {
     const { habitId } = req.params;
     const updateData = req.body;
 
     // Validate request body
-    console.log('[sharedHabitController] Validating request body...');
     const { error } = updateHabitValidation.validate(updateData, { abortEarly: false });
     if (error) {
       const errorMessages = error.details.map((d) => d.message).join(", ");
-      console.error('[sharedHabitController] Validation error:', errorMessages);
       return res.status(400).json({ message: errorMessages });
     }
 
     // Find the habit
-    console.log('[sharedHabitController] Finding habit...');
     const habit = await Habit.findById(habitId);
     if (!habit) {
-      console.error('[sharedHabitController] Habit not found');
       return res.status(404).json({ message: "Habit not found" });
     }
 
     // Check if user owns the habit or is an accepted participant
-    console.log('[sharedHabitController] Checking permissions...');
-    const isOwner = habit.userId.toString() === req.userId.toString();
-    const isParticipant = habit.sharedWith.some(
-      entry => entry.userId.toString() === req.userId.toString() && entry.status === "accepted"
-    );
+    const { isOwner, isParticipant } = checkSharedHabitAuthorization(habit, req.userId);
 
     if (!isOwner && !isParticipant) {
-      console.error('[sharedHabitController] User not authorized to update this habit');
       return res.status(403).json({ message: "Not authorized to update this habit" });
     }
 
@@ -475,7 +431,6 @@ exports.updateSharedHabit = async (req, res) => {
     const { userId, type, sharedWith, sharedHabitId, ...safeUpdateData } = updateData;
 
     // Update the habit
-    console.log('[sharedHabitController] Updating habit...');
     const updatedHabit = await Habit.findByIdAndUpdate(
       habitId,
       { 
@@ -495,7 +450,6 @@ exports.updateSharedHabit = async (req, res) => {
 
     // If this is a participant's copy, also update the original if owner is updating
     if (habit.sharedHabitId && isParticipant) {
-      console.log('[sharedHabitController] Updating original shared habit...');
       await Habit.findByIdAndUpdate(
         habit.sharedHabitId,
         { 
@@ -509,13 +463,11 @@ exports.updateSharedHabit = async (req, res) => {
       );
     }
 
-    console.log('[sharedHabitController] Shared habit updated successfully');
     res.status(200).json({ 
       message: "Shared habit updated successfully", 
       habit: updatedHabit 
     });
   } catch (error) {
-    console.error('[sharedHabitController] Error updating shared habit:', error);
     res.status(500).json({ 
       message: "Server error",
       error: error.message,
@@ -536,10 +488,7 @@ exports.deleteSharedHabit = async (req, res) => {
     }
 
     // Check if user owns the habit or is an accepted participant
-    const isOwner = habit.userId.toString() === req.userId.toString();
-    const isParticipant = habit.sharedWith.some(
-      entry => entry.userId.toString() === req.userId.toString() && entry.status === "accepted"
-    );
+    const { isOwner, isParticipant } = checkSharedHabitAuthorization(habit, req.userId);
 
     if (!isOwner && !isParticipant) {
       return res.status(403).json({ message: "Not authorized to delete this habit" });
@@ -606,7 +555,6 @@ exports.deleteSharedHabit = async (req, res) => {
       return res.status(200).json({ message: "Shared habit deleted for participant and updated for owner" });
     }
   } catch (error) {
-    console.error('[sharedHabitController] Error deleting shared habit:', error);
     res.status(500).json({
       message: "Server error",
       error: error.message,
@@ -619,8 +567,6 @@ exports.deleteSharedHabit = async (req, res) => {
 exports.getSharedHabits = async (req, res) => {
     try {
         const userId = req.userId; // Assuming req.userId is populated by auth middleware
-
-        console.log(`[getSharedHabits] Fetching shared habits for userId: ${userId}`);
 
         // Find habits where:
         // 1. The current user is the owner (sender of an original shared habit).
@@ -637,7 +583,7 @@ exports.getSharedHabits = async (req, res) => {
 .populate("sharedWith.userId", "name email profilePicture")
 .populate("completionStatus.userId", "name email profilePicture") 
 .sort({ createdAt: -1 });
-        console.log(`[getSharedHabits] Found ${sharedHabits.length} raw shared habits.`);
+
 
         const processedSharedHabits = [];
         const uniqueHabitIds = new Set(); // To prevent duplicates if a habit matches multiple $or clauses
@@ -660,7 +606,6 @@ exports.getSharedHabits = async (req, res) => {
                 if (habitObject.sharedHabitId) {
                     // Scenario A: This is the current user's (recipient's) *copy* of a shared habit.
                     // The "other user" is the ORIGINAL SENDER of the habit.
-                    console.log(`[getSharedHabits] Processing recipient's copy (ID: ${habitObject._id}) for userId: ${userId}. SharedHabitId: ${habitObject.sharedHabitId}`);
                     try {
                         // We need to fetch the original habit to get its owner's (sender's) info.
                         const originalSharedHabit = await Habit.findById(habitObject.sharedHabitId)
@@ -669,15 +614,13 @@ exports.getSharedHabits = async (req, res) => {
                         if (originalSharedHabit && originalSharedHabit.userId) {
                             otherUserName = originalSharedHabit.userId.name;
                             otherUserProfilePicture = originalSharedHabit.userId.profilePicture;
-                            relationType = "received"; // This is a copy of a habit received by the current user
-                            console.log(`[getSharedHabits] Found original sender: ${otherUserName}`);
+                            relationType = "received";
                         } else {
                             otherUserName = "Original Sender Unknown"; // Fallback if original sender not found
                             relationType = "received";
-                            console.warn(`[getSharedHabits] Original shared habit or its sender not found for sharedHabitId: ${habitObject.sharedHabitId}`);
                         }
                     } catch (err) {
-                        console.error(`[getSharedHabits] Error fetching original shared habit (ID: ${habitObject.sharedHabitId}) for recipient's copy:`, err);
+
                         otherUserName = "Error (Sender)";
                         relationType = "received";
                     }
@@ -685,7 +628,7 @@ exports.getSharedHabits = async (req, res) => {
                 } else {
                     // Scenario B: This is an ORIGINAL shared habit created by the current user (sender).
                     // The "other user(s)" are the RECIPIENT(s) in the `sharedWith` array.
-                    console.log(`[getSharedHabits] Processing original habit (ID: ${habitObject._id}) sent by userId: ${userId}.`);
+
                     
                     // Prioritize finding an accepted recipient
                     const acceptedRecipient = habitObject.sharedWith.find(entry => 
@@ -696,7 +639,7 @@ exports.getSharedHabits = async (req, res) => {
                         otherUserName = acceptedRecipient.userId.name;
                         otherUserProfilePicture = acceptedRecipient.userId.profilePicture;
                         relationType = "sent";
-                        console.log(`[getSharedHabits] Found accepted recipient: ${otherUserName}`);
+
                     } else {
                         // Fallback: Find the first recipient (can be pending) who is NOT the current user
                         const anyRecipient = habitObject.sharedWith.find(entry => 
@@ -706,11 +649,11 @@ exports.getSharedHabits = async (req, res) => {
                             otherUserName = anyRecipient.userId.name + (anyRecipient.status === "pending" ? " (Pending)" : "");
                             otherUserProfilePicture = anyRecipient.userId.profilePicture;
                             relationType = "sent";
-                            console.log(`[getSharedHabits] Found pending/other recipient: ${otherUserName}`);
+    
                         } else {
                             otherUserName = "No Recipient Yet"; // Should ideally not happen for "shared" type
                             relationType = "sent";
-                            console.log(`[getSharedHabits] No specific recipient found for original habit.`);
+
                         }
                     }
                 }
@@ -718,16 +661,16 @@ exports.getSharedHabits = async (req, res) => {
                 // Case 2: Current user is NOT the owner of this habit.
                 // This means this is an ORIGINAL shared habit that was sent *to* the current user (likely a pending request, or one they accepted).
                 // The "other user" is the owner of this original habit (the original sender).
-                console.log(`[getSharedHabits] Processing original habit (ID: ${habitObject._id}) sent TO userId: ${userId}. Owner is: ${habitObject.userId._id}`);
+
                 if (habitObject.userId) {
                     otherUserName = habitObject.userId.name;
                     otherUserProfilePicture = habitObject.userId.profilePicture;
                     relationType = "received"; // This is an original habit sent by someone else to current user
-                    console.log(`[getSharedHabits] Original sender for this received habit: ${otherUserName}`);
+
                 } else {
                     otherUserName = "Unknown Sender";
                     relationType = "received";
-                    console.warn(`[getSharedHabits] Habit owner not found for original habit sent to userId: ${userId}`);
+
                 }
             }
 
@@ -739,16 +682,16 @@ exports.getSharedHabits = async (req, res) => {
                 relationType: relationType // 'sent' or 'received' to help frontend
             });
             uniqueHabitIds.add(habitObject._id.toString());
-            console.log(`[getSharedHabits] Processed habit ID: ${habitObject._id}, otherUserName: ${otherUserName}, relationType: ${relationType}`);
+
         }
 
-        console.log(`[getSharedHabits] Returning ${processedSharedHabits.length} processed shared habits.`);
+
         res.status(200).json({
             message: "Shared habits retrieved successfully",
             sharedHabits: processedSharedHabits
         });
     } catch (error) {
-        console.error('[getSharedHabits] FATAL ERROR fetching shared habits:', error);
+
         res.status(500).json({
             message: "Server error",
             error: error.message,
@@ -772,10 +715,7 @@ exports.trackSharedHabit = async (req, res) => {
     if (!habit) throw new Error("Habit not found");
 
     // 2. Verify user is either owner or shared participant
-    const isOwner = habit.userId.toString() === userId.toString();
-    const isParticipant = habit.sharedWith.some(
-      sw => sw.userId.toString() === userId.toString() && sw.status === "accepted"
-    );
+    const { isOwner, isParticipant } = checkSharedHabitAuthorization(habit, userId);
     if (!isOwner && !isParticipant) {
       return res.status(403).json({ message: "Not authorized to track this habit" });
     }
@@ -808,31 +748,8 @@ exports.trackSharedHabit = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
-};;
-// Helper function to calculate current streak
-function calculateCurrentStreak(completionDates) {
-  if (!completionDates || completionDates.length === 0) return 0;
-  
-  const sortedDates = [...completionDates].sort((a, b) => b - a);
-  let streak = 1;
-  let currentDate = new Date(sortedDates[0]);
-  currentDate.setHours(0, 0, 0, 0);
-  
-  for (let i = 1; i < sortedDates.length; i++) {
-    const prevDate = new Date(sortedDates[i]);
-    prevDate.setHours(0, 0, 0, 0);
-    
-    const diffDays = Math.floor((currentDate - prevDate) / (1000 * 60 * 60 * 24));
-    if (diffDays === 1) {
-      streak++;
-      currentDate = prevDate;
-    } else if (diffDays > 1) {
-      break;
-    }
-  }
-  
-  return streak;
-}
+};
+// calculateCurrentStreak is now imported from util/dateUtils.js
 
 // Get shared habit progress (for all participants)
 exports.getSharedHabitProgress = async (req, res) => {

@@ -9,18 +9,11 @@ const Habit = require('../models/HabitModel');
 const Distraction = require('../models/distractionModel');
 const Friend = require('../models/FriendModel');
 const Notification = require('../models/NotificationModel');
+const mongoose = require('mongoose');
 
 // Update the uploadProfilePicture method
 exports.uploadProfilePicture = async (req, res) => {
   try {
-    // Check authentication
-    if (!req.userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Not authenticated"
-      });
-    }
-
     // Check if file is present
     if (!req.file) {
       return res.status(400).json({
@@ -85,7 +78,6 @@ exports.uploadProfilePicture = async (req, res) => {
 
 exports.deleteProfilePicture = async (req, res) => {
   try {
-    if (!req.userId) return res.status(401).json({ success: false, message: "Not authenticated" });
 
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
@@ -122,14 +114,6 @@ exports.updateUser = async (req, res) => {
     });
 
     const { name, surname, email } = req.body;
-
-    if (!req.userId) {
-      console.log('Unauthorized - no userId');
-      return res.status(401).json({
-        success: false,
-        message: 'User not authenticated.'
-      });
-    }
 
     // Find user
     const user = await User.findById(req.userId);
@@ -223,13 +207,6 @@ exports.changePassword = async (req, res) => {
   }
 
   try {
-    if (!req.userId) {
-      return res.status(401).json({
-        success: false,
-        message: "User not authenticated."
-      });
-    }
-
     const user = await User.findById(req.userId);
     if (!user) {
       return res.status(404).json({
@@ -264,67 +241,80 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-const badhabit =require('../models/BadHabitModel');
-const habit= require('../models/HabitModel');
-const distractions= require('../models/distractionModel');
-const friend =require('../models/FriendModel');
-const notifications=require('../models/NotificationModel');
+// Duplicate imports removed — using BadHabit, Habit, Distraction, Friend,
+// Notification imported at top of file
 
 exports.deleteAccount = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    if (!req.userId) {
-      return res.status(401).json({
-        success: false,
-        message: "User not authenticated."
-      });
-    }
+    session.startTransaction();
 
-     await badhabit.deleteMany({ userId: req.userId });
-     await habit.deleteMany({ userId: req.userId });
-     await distractions.deleteMany({ userId: req.userId });
-     await friend.deleteMany({
-       $or: [
-         { requester: req.userId },
-         { recipient: req.userId }
-       ]
-     });
-     await notifications.deleteMany({
-       $or: [
-         { recipientId: req.userId },
-         { senderId: req.userId }
-       ]
-     });
-     
-    const user = await User.findByIdAndDelete(req.userId);
-          if (!user) {
-           return res.status(404).json({
+    // Verify user exists before deleting associated data
+    const user = await User.findById(req.userId).session(session);
+    if (!user) {
+      await session.abortTransaction();
+      return res.status(404).json({
         success: false,
         message: "User not found."
       });
-     }
-     
+    }
+
+    // Delete all associated data within the transaction
+    await BadHabit.deleteMany({ userId: req.userId }).session(session);
+    await Habit.deleteMany({ userId: req.userId }).session(session);
+    await Distraction.deleteMany({ userId: req.userId }).session(session);
+    await Friend.deleteMany({
+      $or: [
+        { requester: req.userId },
+        { recipient: req.userId }
+      ]
+    }).session(session);
+    await Notification.deleteMany({
+      $or: [
+        { recipientId: req.userId },
+        { senderId: req.userId }
+      ]
+    }).session(session);
+
+    // Delete the user
+    await User.findByIdAndDelete(req.userId).session(session);
+
+    // Clean up profile picture from disk
+    if (user.profilePicture) {
+      try {
+        const uploadsDir = path.join(__dirname, '../../public/uploads');
+        const filename = user.profilePicture.split('/').pop();
+        const imagePath = path.join(uploadsDir, filename);
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);
+        }
+      } catch (fileErr) {
+        // Don't fail the transaction for file cleanup issues
+        console.error('Error cleaning up profile picture:', fileErr);
+      }
+    }
+
+    await session.commitTransaction();
+
     res.json({
       success: true,
       message: 'Account deleted successfully.'
     });
   } catch (error) {
+    await session.abortTransaction();
     console.error('Error deleting account:', error);
     res.status(500).json({
       success: false,
       message: 'Error deleting account.',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  } finally {
+    session.endSession();
   }
 };
 
 exports.getProfilePicture = async (req, res) => {
   try {
-    if (!req.userId) {
-      return res.status(401).json({ 
-        success: false, 
-        message: "Not authenticated" 
-      });
-    }
 
     const user = await User.findById(req.userId);
     if (!user) {
@@ -359,13 +349,6 @@ exports.getProfilePicture = async (req, res) => {
 // Add this new method to get user info
 exports.getUserInfo = async (req, res) => {
   try {
-    if (!req.userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Not authenticated"
-      });
-    }
-
     const user = await User.findById(req.userId).select('-password');
     if (!user) {
       return res.status(404).json({

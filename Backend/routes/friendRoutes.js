@@ -8,7 +8,6 @@ const {
     validateRemoveFriend
 } = require("../middleware/friendMiddleware");
 
-// Friend management routes
 router.get("/friends", authenticate, friendController.getFriendsList);
 router.get("/incoming-requests", authenticate, friendController.getIncomingRequests);
 router.post("/cancel-request", authenticate, friendController.cancelFriendRequest);
@@ -17,7 +16,6 @@ router.get('/friends/sent-requests', authenticate, friendController.getSentReque
 router.delete("/remove-friend", authenticate, friendController.removeFriend);
 
 
-// Search and request routess
 router.get("/search-users", authenticate, friendController.searchUsers);
 router.post("/send-request", authenticate, friendController.sendFriendRequest);
 router.post('/accept-request', authenticate,friendController.acceptFriendRequest);
