@@ -15,7 +15,7 @@ ComHabits is a community-driven, collaborative habit tracking application design
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 ### Backend
 * **Runtime:** Node.js (v18+)
